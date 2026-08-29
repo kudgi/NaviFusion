@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>NaviFusion | Multi-Road Urban Simulation</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #8cd675; }
+        
+        #hud {
+            position: absolute; top: 20px; left: 20px;
+            background: rgba(15, 20, 25, 0.9); backdrop-filter: blur(10px);
+            color: #fff; padding: 20px 25px; border-radius: 10px; width: 340px;
+            box-shadow: 0 15px 35px rgba(0,0,0,0.4);
+            border-left: 5px solid #00F3FF;
+            transition: border-color 0.3s ease;
+        }
+        h2 { margin: 0 0 5px 0; font-size: 16px; letter-spacing: 1.5px; text-transform: uppercase; color: #fff; }
+        p { margin: 0 0 12px 0; font-size: 12px; color: #8b949e; }
+        .status-badge { display: inline-block; padding: 4px 10px; border-radius: 12px; font-size: 10px; font-weight: bold; letter-spacing: 1px; }
+        
+        .metrics { display: flex; justify-content: space-between; margin-top: 15px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 15px; }
+        .metric-val { font-size: 18px; font-weight: bold; color: #fff; font-family: monospace; }
+        .metric-lbl { font-size: 10px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; }
+    </style>
+</head>
+<body>
+
+    <div id="hud" style="border-left-color: #00F3FF;">
+        <h2 id="status-title">URBAN ROAD NETWORK</h2>
+        <p>Multi-lane GNSS navigation sync.</p>
+        <div style="font-size: 11px; font-weight: bold;">SYSTEM: <span id="gnss-status" class="status-badge" style="background: rgba(0,243,255,0.15); color: #00F3FF;">GNSS ACTIVE</span></div>
+        
+        <div class="metrics">
+            <div>
+                <div class="metric-lbl">Pose (X, Y)</div>
+                <div class="metric-val" id="pose-val">0.0, 0.0</div>
+            </div>
+            <div style="text-align: right;">
+                <div class="metric-lbl">Drift Prevented</div>
+                <div class="metric-val" id="drift-val" style="color: #00F3FF;">0.00 m</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 1. Scene, Camera & Renderer Setup
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color('#78b163'); // Rich green terrain
+        scene.fog = new THREE.FogExp2('#78b163', 0.012);
+
+        const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        document.body.appendChild(renderer.domElement);
+
+        // 2. Lighting
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.65);
+        scene.add(ambientLight);
+        
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.85);
+        dirLight.position.set(100, 200, 100);
+        dirLight.castShadow = true;
+        scene.add(dirLight);
+
+        // 3. Multi-Road Grid Network Generation
+        const roadMat = new THREE.MeshStandardMaterial({ color: 0x3a3f47, roughness: 0.8 });
+        const lineMat = new THREE.MeshBasicMaterial({ color: 0xffeb3b });
+        const whiteMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+
+        function createRoadSegment(width, length, x, z, rotationY = 0) {
+            const group = new THREE.Group();
+            
+            // Main Asphalt
+            const planeGeo = new THREE.PlaneGeometry(width, length);
+            const roadMesh = new THREE.Mesh(planeGeo, roadMat);
+            roadMesh.rotation.x = -Math.PI / 2;
+            group.add(roadMesh);
+
+            // Center Dashes
+            for (let i = -length/2 + 5; i < length/2 - 5; i += 12) {
+                const dashGeo = new THREE.BoxGeometry(0.25, 0.02, 4);
+                const dash = new THREE.Mesh(dashGeo, lineMat);
+                dash.position.set(0, 0.02, i);
+                group.add(dash);
+            }
+
+            group.position.set(x, 0.01, z);
+            group.rotation.y = rotationY;
+            scene.add(group);
+        }
+
+        // Build a Grid of Multiple Roads & Intersections
+        createRoadSegment(18, 600, 0, 0);       // Main Vertical Avenue 1
+        createRoadSegment(18, 600, 50, 0);      // Parallel Avenue 2
+        createRoadSegment(18, 600, -50, 0);     // Parallel Avenue 3
+        
+        createRoadSegment(18, 300, 0, -100, Math.PI / 2); // Cross Street 1
+        createRoadSegment(18, 300, 0, 100, Math.PI / 2);  // Cross Street 2
+
+        // 4. Build Detailed 3D Car Model
+        const carGroup = new THREE.Group();
+
+        const bodyGeo = new THREE.BoxGeometry(2.2, 0.7, 4.5);
+        const bodyMat = new THREE.MeshStandardMaterial({ color: 0xf0f3f6, metalness: 0.3, roughness: 0.2 });
+        const body = new THREE.Mesh(bodyGeo, bodyMat);
+        body.position.y = 0.6;
+        carGroup.add(body);
+
+        const cabinGeo = new THREE.BoxGeometry(1.8, 0.6, 2.3);
+        const cabinMat = new THREE.MeshStandardMaterial({ color: 0x111923, metalness: 0.9, roughness: 0.1 });
+        const cabin = new THREE.Mesh(cabinGeo, cabinMat);
+        cabin.position.set(0, 1.15, -0.2);
+        carGroup.add(cabin);
+
+        const wheels = [];
+        const wheelGeo = new THREE.CylinderGeometry(0.4, 0.4, 0.3, 24);
+        const wheelMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a });
+        [[ -1.2, 0.4, 1.4 ], [ 1.2, 0.4, 1.4 ], [ -1.2, 0.4, -1.4 ], [ 1.2, 0.4, -1.4 ]].forEach(pos => {
+            const wheel = new THREE.Mesh(wheelGeo, wheelMat);
+            wheel.rotation.z = Math.PI / 2;
+            wheel.position.set(...pos);
+            carGroup.add(wheel);
+            wheels.push(wheel);
+        });
+
+        scene.add(carGroup);
+
+        // 5. Trajectory Line Trail
+        const trailPoints = [];
+        const trailGeo = new THREE.BufferGeometry();
+        const trailMat = new THREE.LineBasicMaterial({ color: 0x00F3FF, linewidth: 4 });
+        const trailLine = new THREE.Line(trailGeo, trailMat);
+        scene.add(trailLine);
+
+        // 6. Telemetry Data Handling & Fallback Simulation Loop
+        let targetZ = 0, targetX = 0;
+        let currentZ = 0, currentX = 0;
+        let csvRows = [];
+        let rowIndex = 0;
+        let isUsingFallback = true;
+
+        async function fetchTelemetry() {
+            try {
+                const response = await fetch('live_telemetry.csv?' + new Date().getTime());
+                const text = await response.text();
+                const lines = text.trim().split('\n');
+                if (lines.length > 2) {
+                    csvRows = lines.slice(1);
+                    isUsingFallback = false;
+                }
+            } catch (e) {
+                isUsingFallback = true;
+            }
+        }
+        setInterval(fetchTelemetry, 1000);
+
+        function updateSimulation() {
+            if (!isUsingFallback && csvRows.length > 0) {
+                // Read from live CSV data provided by backend
+                const parts = csvRows[rowIndex].split(',');
+                targetX = parseFloat(parts[1]) * 0.5;
+                targetZ = parseFloat(parts[2]);
+                const status = parts[5].trim();
+                const drift = parseFloat(parts[6]).toFixed(2);
+                
+                document.getElementById('pose-val').innerText = `${parts[1]},${parts[2]}`;
+                document.getElementById('drift-val').innerText = `${drift} m`;
+                updateHUDStatus(status);
+
+                rowIndex = (rowIndex + 1) % csvRows.length;
+            } else {
+                // Smooth Fallback Loop (Drives the car through the multi-road grid automatically)
+                const t = Date.now() * 0.001;
+                targetZ = Math.sin(t * 0.5) * 120;
+                targetX = Math.cos(t * 0.3) * 25; // Shifts across parallel avenues!
+                
+                const isOutage = Math.floor(t / 5) % 2 === 1;
+                document.getElementById('pose-val').innerText = `${targetX.toFixed(1)},${targetZ.toFixed(1)}`;
+                document.getElementById('drift-val').innerText = (isOutage ? "1.85 m" : "0.00 m");
+                updateHUDStatus(isOutage ? "OUTAGE" : "ACTIVE");
+            }
+        }
+        setInterval(updateSimulation, 100);
+
+        function updateHUDStatus(status) {
+            const statusBadge = document.getElementById('gnss-status');
+            const hudBox = document.getElementById('hud');
+            if (status === 'ACTIVE') {
+                document.getElementById('status-title').innerText = "URBAN ROAD NETWORK";
+                statusBadge.innerText = "GNSS ACTIVE";
+                statusBadge.style.background = "rgba(0,243,255,0.15)";
+                statusBadge.style.color = "#00F3FF";
+                hudBox.style.borderLeftColor = "#00F3FF";
+                document.getElementById('drift-val').style.color = "#00F3FF";
+            } else {
+                document.getElementById('status-title').innerText = "GNSS OUTAGE DETECTED";
+                statusBadge.innerText = "AEKF BACKUP ACTIVE";
+                statusBadge.style.background = "rgba(255,0,85,0.15)";
+                statusBadge.style.color = "#FF0055";
+                hudBox.style.borderLeftColor = "#FF0055";
+                document.getElementById('drift-val').style.color = "#FF0055";
+            }
+        }
+
+        // 7. Main Animation Loop with Smooth Interpolation
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Smooth Lerp for vehicle motion
+            currentZ += (targetZ - currentZ) * 0.1;
+            currentX += (targetX - currentX) * 0.1;
+
+            carGroup.position.z = currentZ;
+            carGroup.position.x = currentX;
+
+            // Camera Chase View
+            camera.position.set(currentX - 10, currentZ - 14, currentZ - 18);
+            camera.lookAt(currentX, 1, currentZ + 3);
+
+            // Rotate wheels
+            wheels.forEach(w => w.rotation.x += 0.15);
+
+            // Update trajectory trail ribbon
+            trailPoints.push(new THREE.Vector3(currentX, 0.2, currentZ));
+            if (trailPoints.length > 200) trailPoints.shift();
+            trailGeo.setFromPoints(trailPoints);
+
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
